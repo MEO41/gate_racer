@@ -1,0 +1,755 @@
+<title>Gate Race Viewer</title>
+<style>
+/* Layout: 3D hangar on the left, a "what the drone perceives" instrument column on the right,
+   one control bar along the bottom. On phones the column drops under a shorter 3D view.
+   Single dark look on purpose: it mirrors the dim hangar in the reference footage. */
+:root {
+  --bg: #1d1f24;
+  --panel: #191b20;
+  --raise: #23262d;
+  --line: #343944;
+  --fg: #e6e8ee;
+  --muted: #959cab;
+  --trail: #4d6bff;
+  /* the four gate corners, as seen while approaching the gate */
+  --c-br: #ffb547;
+  --c-bl: #ff7a6b;
+  --c-tl: #57d6a8;
+  --c-tr: #c69bff;
+  --est: #f2cf86;        /* the drone's own estimate of where it is */
+  --est-band: rgba(242, 207, 134, 0.2);
+  --good: #57d6a8;
+  --bad: #ff5c5c;
+  --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, monospace;
+  --col-w: 372px;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 13px;
+  margin: 0; overflow: hidden;
+  display: grid; grid-template-columns: minmax(0, 1fr) var(--col-w);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas: "stage col" "bar bar";
+}
+#stage { grid-area: stage; position: relative; min-width: 0; min-height: 0; }
+#stage > canvas { position: absolute; inset: 0; display: block; }
+.chip {
+  position: absolute; top: 14px; left: 16px;
+  background: rgba(25, 27, 32, 0.86); border: 1px solid var(--line); border-radius: 6px;
+  padding: 10px 14px; display: grid; gap: 4px; max-width: calc(100% - 32px);
+}
+.chip h1 { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; margin: 0; }
+.row { font-family: var(--font-data); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.row b { color: var(--fg); font-weight: 500; }
+
+/* perception column */
+#col {
+  grid-area: col; min-width: 0; min-height: 0; overflow-y: auto;
+  background: var(--panel); border-left: 1px solid var(--line);
+  padding: 14px 16px 18px; display: grid; gap: 18px; align-content: start;
+}
+section { display: grid; gap: 8px; min-width: 0; }
+h2 {
+  margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+}
+h2 span { font-family: var(--font-data); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.camwrap { position: relative; width: 100%; aspect-ratio: 1; max-width: 100%; border-radius: 4px; overflow: hidden; background: #000; }
+.camwrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#camGL { filter: grayscale(1) contrast(1.15) brightness(1.05); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+.legend i.hollow { border: 1.5px solid var(--muted); background: transparent; width: 7px; height: 7px; }
+.legend b.x { font: 700 14px var(--font-data); color: var(--fg); margin-right: 5px; line-height: 1; }
+.legend b.x.dim { color: var(--muted); }
+.legend i.band { border-radius: 2px; width: 14px; background: var(--est-band); border: 1px solid var(--est); }
+.legend i.tick { border-radius: 0; width: 2px; height: 11px; background: var(--good); vertical-align: -1px; }
+.legend i.tick.bad { background: var(--bad); }
+#errPlot { width: 100%; height: 84px; display: block; }
+.legend i.axis { border-radius: 0; width: 10px; height: 2px; background: var(--fg); vertical-align: 3px; }
+.kv { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.kv div { background: var(--raise); border-radius: 4px; padding: 6px 8px; display: grid; gap: 2px; min-width: 0; }
+.kv small { font-size: 11px; color: var(--muted); }
+.kv b { font-family: var(--font-data); font-weight: 500; font-size: 13px; font-variant-numeric: tabular-nums; }
+#strip { width: 100%; height: 92px; display: block; }
+table { width: 100%; border-collapse: collapse; font-family: var(--font-data); font-size: 12px; font-variant-numeric: tabular-nums; }
+th { font: 500 10.5px var(--font-ui); color: var(--muted); text-align: right; letter-spacing: .04em; text-transform: uppercase; padding: 0 0 4px; }
+th:first-child, td:first-child { text-align: left; }
+td { text-align: right; padding: 3px 0; border-top: 1px solid var(--line); }
+td i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.state { display: grid; gap: 3px; }
+.bars { display: grid; gap: 7px; }
+.bar-row { display: grid; grid-template-columns: 74px minmax(0, 1fr) 84px; align-items: center; gap: 8px; }
+.bar-row span:first-child { color: var(--muted); font-size: 12px; }
+.bar-row output { font-family: var(--font-data); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.track { position: relative; height: 10px; background: var(--raise); border-radius: 2px; overflow: hidden; }
+.track.center::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.fill { position: absolute; top: 0; bottom: 0; background: var(--trail); }
+.note { font-size: 12px; line-height: 1.5; color: var(--muted); margin: 0; max-width: 65ch; }
+.note b { color: var(--fg); font-weight: 500; }
+
+/* control bar */
+.bar {
+  grid-area: bar;
+  padding: 10px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+  background: var(--panel); border-top: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+}
+button, select {
+  font: 500 13px var(--font-ui); color: var(--fg); background: var(--raise);
+  border: 1px solid var(--line); border-radius: 5px; padding: 6px 12px; cursor: pointer;
+}
+button:hover, select:hover { border-color: var(--trail); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--trail); outline-offset: 2px; }
+#scrub { flex: 1 1 200px; accent-color: var(--trail); min-width: 0; }
+#clock { font-family: var(--font-data); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 9ch; }
+label.grp { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+
+@media (max-width: 860px) {
+  body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 42% minmax(0, 1fr) auto;
+    grid-template-areas: "stage" "col" "bar";
+  }
+  #col { border-left: 0; border-top: 1px solid var(--line); }
+  .camwrap { max-width: 420px; }
+  .chip { padding: 7px 10px; }
+  .chip .row.extra { display: none; }
+}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&display=swap">
+
+<div id="stage">
+  <div class="chip">
+    <h1>Gate race</h1>
+    <div class="row">drones <b id="nDrones">–</b> · gates <b id="nGates">–</b> · best lap <b id="bestLap">–</b></div>
+    <div class="row extra">speed <b id="speed">–</b> m/s · aiming at gate <b id="gateNo">–</b></div>
+  </div>
+</div>
+
+<aside id="col" aria-label="What the drone perceives">
+  <section id="secCam">
+    <h2>Drone camera <span id="camSub">greyscale · 30° up-tilt · 100° FOV</span></h2>
+    <div class="camwrap">
+      <canvas id="camGL" aria-label="View from the drone's onboard camera"></canvas>
+      <canvas id="camOver" aria-hidden="true"></canvas>
+    </div>
+    <div class="legend" id="camLegend">
+      <span><i style="background:var(--c-tl)"></i>detected, size = confidence</span>
+      <span><b class="x">×</b>missed</span>
+      <span><b class="x dim">×</b>hidden behind a gate</span>
+      <span><b class="x">+</b>true corner</span>
+    </div>
+    <div class="kv">
+      <div><small>Corners detected</small><b id="detN">–</b></div>
+      <div><small>Next-gate confidence</small><b id="confAvg">–</b></div>
+      <div><small>Angle δ to gate</small><b id="delta">–</b></div>
+      <div><small>Position error</small><b id="perr">–</b></div>
+    </div>
+  </section>
+
+  <section id="secErr">
+    <h2>Where it thinks it is <span>position estimate error</span></h2>
+    <canvas id="errPlot" aria-label="Position estimate error over the flight"></canvas>
+    <div class="legend">
+      <span><i class="axis" style="background:var(--est)"></i>error</span>
+      <span><i class="band"></i>filter's own 2σ</span>
+      <span><i class="tick"></i>detector fix used</span>
+      <span><i class="tick bad"></i>fix rejected</span>
+    </div>
+  </section>
+
+  <section id="secInput">
+    <h2>Policy input <span>31 numbers, every 10 ms</span></h2>
+    <canvas id="strip" aria-label="All 31 policy inputs as bars"></canvas>
+    <table aria-label="Next gate corners in the drone's body frame">
+      <thead><tr><th>Gate <span id="tgt">–</span> corner</th><th>forward</th><th>left</th><th>up</th></tr></thead>
+      <tbody id="cornerRows"></tbody>
+    </table>
+    <div class="state">
+      <div class="row">position (estimate) <b id="pos">–</b> m</div>
+      <div class="row">velocity <b id="vel">–</b> m/s</div>
+      <div class="row">gate centre <b id="gdist">–</b> m ahead</div>
+    </div>
+  </section>
+
+  <section id="secOut">
+    <h2>Policy output <span>4 commands</span></h2>
+    <div class="bars">
+      <div class="bar-row"><span>Thrust</span><div class="track"><div class="fill" id="bThrust"></div></div><output id="oThrust">–</output></div>
+      <div class="bar-row"><span>Roll rate</span><div class="track center"><div class="fill" id="bRoll"></div></div><output id="oRoll">–</output></div>
+      <div class="bar-row"><span>Pitch rate</span><div class="track center"><div class="fill" id="bPitch"></div></div><output id="oPitch">–</output></div>
+      <div class="bar-row"><span>Yaw rate</span><div class="track center"><div class="fill" id="bYaw"></div></div><output id="oYaw">–</output></div>
+    </div>
+  </section>
+
+  <p class="note" id="note">The policy never sees the picture. It sees the <b>12 corner numbers</b>, plus the drone's
+    position, velocity, attitude and last command. In this simulator those numbers are exact. On the real Swift
+    drone, a neural network finds the corners in greyscale camera frames, and a Kalman filter combines them with
+    visual-inertial odometry, so the policy gets noisier, drifting versions of the same numbers.</p>
+</aside>
+
+<div class="bar">
+  <button id="play" type="button">Pause</button>
+  <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Timeline">
+  <span id="clock">0.00 s</span>
+  <label class="grp" for="rate">Speed
+    <select id="rate"><option value="0.1">0.1×</option><option value="0.25">0.25×</option><option value="0.5" selected>0.5×</option><option value="1">1×</option><option value="2">2×</option></select>
+  </label>
+  <label class="grp" for="cam">Camera
+    <select id="cam"><option value="orbit">Orbit</option><option value="chase" selected>Chase</option><option value="fpv">FPV</option></select>
+  </label>
+  <label class="grp" for="focus">Drone
+    <select id="focus"></select>
+  </label>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script id="traj" type="application/json">/*__TRAJ__*/</script>
+<script>
+const D = JSON.parse(document.getElementById('traj').textContent);
+const N = D.paths.length, dt = D.dt;
+const T = Math.max(...D.paths.map(p => p.length));
+const CAM_TILT = (D.cam_tilt_deg ?? 30) * Math.PI / 180;
+const CAM_FOV = 100;
+const css = getComputedStyle(document.documentElement);
+const tok = (n) => css.getPropertyValue(n).trim();
+// corner order from track.py: 0 bottom-right, 1 bottom-left, 2 top-left, 3 top-right (seen while approaching)
+const CORNERS = [
+  { name: 'bottom right', color: tok('--c-br') },
+  { name: 'bottom left', color: tok('--c-bl') },
+  { name: 'top left', color: tok('--c-tl') },
+  { name: 'top right', color: tok('--c-tr') },
+];
+const PERC = D.perception || null;     // present when the drone flew on its own estimate
+const IMG = PERC ? PERC.img : 384;
+const LAT = PERC ? PERC.latency_steps : 0;
+const frameIdx = PERC ? PERC.frames.map((fr) => fr.map((x) => x[0])) : null;
+function frameAt(i, k) {   // newest camera frame whose detections have arrived by step k
+  const a = frameIdx[i]; let lo = 0, hi = a.length - 1, best = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m] + LAT <= k) { best = m; lo = m + 1; } else hi = m - 1; }
+  return best;
+}
+function estPos(i, k) { const o = D.obs[i][k]; return PERC ? [o[0] * 10, o[1] * 10, o[2] * 10] : D.paths[i][k]; }
+const errs = D.paths.map((path, i) => path.map((p, k) => {
+  const e = estPos(i, k); return Math.hypot(e[0] - p[0], e[1] - p[1], e[2] - p[2]);
+}));
+const LAYER_VIZ = 1;   // trails, drones, rays: visible to the spectator, never to the onboard camera
+
+// sim is z-up; three.js is y-up → (x, y, z)sim  ->  (x, z, -y)three
+const V = (p) => new THREE.Vector3(p[0], p[2], -p[1]);
+
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+stage.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1d1f24);
+scene.fog = new THREE.Fog(0x1d1f24, 25, 60);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 200);
+camera.layers.enable(LAYER_VIZ);
+camera.position.set(-9, 6.5, 11);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(2.5, 1.8, 0.5);
+controls.enableDamping = true;
+
+const hemi = new THREE.HemisphereLight(0xc8ccd8, 0x2a2c33, 0.9); scene.add(hemi);
+const key = new THREE.DirectionalLight(0xffffff, 0.5); key.position.set(5, 20, 8); scene.add(key);
+
+function viz(obj) { obj.traverse((o) => o.layers.set(LAYER_VIZ)); return obj; }
+
+// floor: soft radial pool of light, like a hangar spot
+(() => {
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(256, 256, 20, 256, 256, 256);
+  grd.addColorStop(0, '#4a4d55'); grd.addColorStop(1, '#1d1f24');
+  g.fillStyle = grd; g.fillRect(0, 0, 512, 512);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(70, 70),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c) }));
+  floor.rotation.x = -Math.PI / 2; floor.position.set(2, 0, 0);
+  scene.add(floor);
+})();
+
+// gate texture: navy frame with checker corners and a number
+function gateTexture(num) {
+  const S = 512, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  const b = S * (D.gate_outer - D.gate_inner) / 2 / D.gate_outer; // border px
+  g.fillStyle = '#1b2463'; g.fillRect(0, 0, S, S);
+  g.clearRect(b, b, S - 2 * b, S - 2 * b);
+  const sq = b / 3;
+  g.fillStyle = '#f2f3f7';
+  for (const [cx, cy] of [[0, 0], [S - 3 * sq * 2, 0], [0, S - b], [S - 3 * sq * 2, S - b]])
+    for (let i = 0; i < 6; i++) for (let j = 0; j < 3; j++)
+      if ((i + j) % 2 === 0) g.fillRect(cx + i * sq, cy + j * sq, sq, sq);
+  g.fillStyle = '#2f5bff';
+  g.fillRect(0, S * 0.35, b * 0.55, S * 0.3); g.fillRect(S - b * 0.55, S * 0.35, b * 0.55, S * 0.3);
+  g.fillStyle = '#f2f3f7'; g.font = `600 ${b * 0.62}px "IBM Plex Sans", sans-serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(String(num), S / 2, b / 2); g.fillText(String(num), S / 2, S - b / 2);
+  const t = new THREE.CanvasTexture(c); t.anisotropy = 4; return t;
+}
+const postMat = new THREE.MeshStandardMaterial({ color: 0xc9ccd4, metalness: 0.6, roughness: 0.4 });
+const gateCorners = D.gates.map((gt) => gt.corners.map(V));
+const gateCentres = D.gates.map((gt) => V(gt.pos));
+D.gates.forEach((gt, i) => {
+  const grp = new THREE.Group();
+  grp.add(new THREE.Mesh(new THREE.PlaneGeometry(D.gate_outer, D.gate_outer),
+    new THREE.MeshBasicMaterial({ map: gateTexture(i + 1), transparent: true, side: THREE.DoubleSide })));
+  const h = gt.pos[2] - D.gate_outer / 2;
+  if (h > 0.05) for (const s of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, h, 8), postMat);
+    post.position.set(s * D.gate_outer / 2 * 0.95, -D.gate_outer / 2 - h / 2, 0); grp.add(post);
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.6), postMat);
+    foot.position.set(s * D.gate_outer / 2 * 0.95, -gt.pos[2] + 0.015, 0); grp.add(foot);
+  }
+  grp.position.copy(V(gt.pos));
+  grp.lookAt(grp.position.clone().sub(V(gt.normal)));   // printed side faces the approaching drone
+  scene.add(grp);
+});
+
+// drones: trail (full path dim, recent segment bright) + body
+const palette = [0x4d6bff, 0x6b8cff, 0x3a54e0, 0x8aa2ff, 0x5a74ff, 0x2f48c8, 0x7d96ff, 0x4460f0];
+const drones = D.paths.map((path, i) => {
+  const pts = path.map(V);
+  const col = palette[i % palette.length];
+  const full = viz(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false })));
+  scene.add(full);
+  const TAIL = 90;
+  const tailGeo = new THREE.BufferGeometry();
+  tailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TAIL * 3), 3));
+  const tail = viz(new THREE.Line(tailGeo, new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false })));
+  scene.add(tail);
+  const body = new THREE.Group();
+  const arm = new THREE.MeshStandardMaterial({ color: 0x23262d, roughness: 0.6 });
+  const a1 = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.02, 0.03), arm); a1.rotation.y = Math.PI / 4;
+  const a2 = a1.clone(); a2.rotation.y = -Math.PI / 4; body.add(a1, a2);
+  const ledMat = new THREE.MeshBasicMaterial({ color: col });
+  for (const [x, z] of [[0.12, 0.12], [0.12, -0.12], [-0.12, 0.12], [-0.12, -0.12]]) {
+    const led = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), ledMat); led.position.set(x, 0, z); body.add(led);
+  }
+  scene.add(viz(body));
+  return { pts, q: D.quats[i], full, tail, tailGeo, TAIL, body };
+});
+
+// perception overlays in the 3D scene, for the focused drone only
+const rayGeo = new THREE.BufferGeometry();
+rayGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(8 * 3), 3));
+const rayCols = new Float32Array(8 * 3);
+CORNERS.forEach((c, j) => { const col = new THREE.Color(c.color); for (const e of [0, 1]) col.toArray(rayCols, (2 * j + e) * 3); });
+rayGeo.setAttribute('color', new THREE.BufferAttribute(rayCols, 3));
+const rays = viz(new THREE.LineSegments(rayGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, depthTest: false })));
+rays.renderOrder = 10; scene.add(rays);
+const ringGeo = new THREE.BufferGeometry();
+ringGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(5 * 3), 3));
+const ring = viz(new THREE.Line(ringGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 })));
+scene.add(ring);
+// where the drone believes it is: a small sand-coloured ball, its 2σ uncertainty, and a link to the truth
+const estBall = viz(new THREE.Mesh(new THREE.SphereGeometry(0.045, 16, 12),
+  new THREE.MeshBasicMaterial({ color: tok('--est'), depthTest: false, transparent: true })));
+estBall.renderOrder = 12; scene.add(estBall);
+const estCloud = viz(new THREE.Mesh(new THREE.SphereGeometry(1, 18, 12),
+  new THREE.MeshBasicMaterial({ color: tok('--est'), wireframe: true, transparent: true, opacity: 0.35, depthWrite: false })));
+scene.add(estCloud);
+const estLinkGeo = new THREE.BufferGeometry();
+estLinkGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+const estLink = viz(new THREE.Line(estLinkGeo, new THREE.LineBasicMaterial({ color: tok('--est'), depthTest: false, transparent: true })));
+scene.add(estLink);
+const cornerBalls = CORNERS.map((c) => {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.13, 20, 14),
+    new THREE.MeshBasicMaterial({ color: c.color, depthTest: false, transparent: true }));  // drawn after the gate panels
+  m.renderOrder = 11; scene.add(viz(m)); return m;
+});
+// camera field of view as a wire pyramid
+const frustumGeo = new THREE.BufferGeometry();
+frustumGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(16 * 3), 3));
+const frustum = viz(new THREE.LineSegments(frustumGeo, new THREE.LineBasicMaterial({ color: 0xe6e8ee, transparent: true, opacity: 0.3 })));
+scene.add(frustum);
+
+// onboard camera: its own renderer, sees layer 0 only (gates + floor)
+const camGL = document.getElementById('camGL'), camOver = document.getElementById('camOver');
+const camRenderer = new THREE.WebGLRenderer({ canvas: camGL, antialias: true });
+camRenderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const droneCam = new THREE.PerspectiveCamera(CAM_FOV, 1, 0.05, 100);
+const octx = camOver.getContext('2d');
+
+// sim body frame (x fwd, y left, z up) -> three quaternion
+const basis = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().set(
+  1, 0, 0, 0,  0, 0, 1, 0,  0, -1, 0, 0,  0, 0, 0, 1));
+const basisInv = basis.clone().invert();
+function simQuat(q) { // q = [w,x,y,z] world<-body in sim axes
+  return basis.clone().multiply(new THREE.Quaternion(q[1], q[2], q[3], q[0])).multiply(basisInv);
+}
+const qTilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), CAM_TILT);
+const qLook = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
+function placeOnboard(cam, pos, qBody) {
+  cam.position.copy(pos);
+  cam.quaternion.copy(qBody.clone().multiply(qTilt).multiply(qLook));
+  cam.updateMatrixWorld();
+}
+function rotMat(q) { // same convention as sim.quat_to_rot, row-major
+  const [w, x, y, z] = q;
+  return [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y),
+          2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
+          2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)];
+}
+
+// UI
+const $ = (id) => document.getElementById(id);
+$('nDrones').textContent = N; $('nGates').textContent = D.gates.length;
+$('bestLap').textContent = D.best_lap ? D.best_lap.toFixed(2) + ' s' : 'no full lap';
+$('camSub').textContent = PERC
+  ? `30 Hz · 40 ms late · ${CAM_FOV}° FOV`
+  : `greyscale · ${Math.round(CAM_TILT * 180 / Math.PI)}° up-tilt · ${CAM_FOV}° FOV`;
+if (PERC) {
+  $('note').innerHTML = 'The policy never sees the picture. It sees <b>31 numbers</b> built from the drone\'s own estimate ' +
+    'of where it is: visual-inertial odometry that drifts, pulled back by these corner detections through a Kalman ' +
+    'filter. The detector is a model, not a neural network: its confidence drops with distance, oblique views, motion ' +
+    'blur and the image edge; corners behind another gate are never found; found corners carry pixel noise and rare outliers.';
+} else {
+  $('secErr').hidden = true;
+  $('camLegend').innerHTML = '<span><i style="background:var(--c-tl)"></i>next-gate corners (exact)</span>' +
+    '<span><i class="hollow"></i>other gates</span><span><i class="axis"></i>optical axis → gate centre</span>';
+}
+const focus = $('focus');
+let bestDrone = 0;
+D.paths.forEach((_, i) => {
+  const o = document.createElement('option'); o.value = i;
+  o.textContent = `Drone ${i + 1} · ${D.gate_times[i].length} gates`;
+  focus.appendChild(o);
+  if (D.gate_times[i].length > D.gate_times[bestDrone].length) bestDrone = i;
+});
+focus.value = bestDrone;
+const rowsEl = $('cornerRows');
+const cornerCells = CORNERS.map((c) => {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><i style="background:${c.color}"></i>${c.name}</td><td>–</td><td>–</td><td>–</td>`;
+  rowsEl.appendChild(tr);
+  return [...tr.children].slice(1);
+});
+
+let playing = true, t = 0, rate = 0.5;
+$('play').onclick = () => { playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play'; };
+$('rate').onchange = (e) => rate = +e.target.value;
+$('scrub').oninput = (e) => { t = (+e.target.value / 1000) * (D.paths[+focus.value || 0].length - 1); };
+focus.onchange = () => { t = 0; };
+if (matchMedia('(prefers-reduced-motion: reduce)').matches) { playing = false; $('play').textContent = 'Play'; t = 200; }
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false);
+  renderer.domElement.style.width = w + 'px'; renderer.domElement.style.height = h + 'px';
+  camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
+  const s = camGL.clientWidth;
+  camRenderer.setSize(s, s, false);
+  camOver.width = Math.round(s * devicePixelRatio); camOver.height = Math.round(s * devicePixelRatio);
+  errCanvas.width = Math.round(errCanvas.clientWidth * devicePixelRatio);
+  errCanvas.height = Math.round(errCanvas.clientHeight * devicePixelRatio);
+  stripCanvas.width = Math.round(stripCanvas.clientWidth * devicePixelRatio);
+  stripCanvas.height = Math.round(stripCanvas.clientHeight * devicePixelRatio);
+}
+const stripCanvas = $('strip'), sctx = stripCanvas.getContext('2d');
+const errCanvas = $('errPlot'), ectx = errCanvas.getContext('2d');
+new ResizeObserver(resize).observe(stage);
+new ResizeObserver(resize).observe($('col'));
+resize();
+
+// --- per-frame drawing helpers -------------------------------------------------
+const HOVER = 2 * 9.81 / D.max_thrust - 1;
+function policyInput(i, k) {
+  const o = D.obs[i][k];
+  const prev = k > 0 ? D.act[i][k - 1] : [HOVER, 0, 0, 0];
+  // attitude shown from the true quaternion; the policy's VIO attitude differs by ~0.4°
+  if (o.length === 18) return [...o.slice(0, 6), ...rotMat(D.quats[i][k]), ...o.slice(6, 18), ...prev];
+  const p = D.paths[i][k];
+  return [...p.map((v) => v / 10), ...o.slice(0, 3), ...rotMat(D.quats[i][k]), ...o.slice(3, 15), ...prev];
+}
+const GROUPS = [
+  { label: 'pos', n: 3 }, { label: 'vel', n: 3 }, { label: 'attitude', n: 9 },
+  { label: 'next-gate corners', n: 12 }, { label: 'cmd', n: 4 },
+];
+function drawStrip(x) {
+  const W = stripCanvas.width, H = stripCanvas.height, r = devicePixelRatio;
+  sctx.clearRect(0, 0, W, H);
+  const gap = 8 * r, n = 31, labelH = 16 * r;
+  const bw = (W - gap * (GROUPS.length - 1)) / n;
+  const mid = (H - labelH) / 2, amp = mid - 2 * r;
+  sctx.strokeStyle = tok('--line'); sctx.lineWidth = r;
+  sctx.beginPath(); sctx.moveTo(0, mid); sctx.lineTo(W, mid); sctx.stroke();
+  let xi = 0, idx = 0;
+  sctx.font = `${10.5 * r}px ${tok('--font-ui')}`; sctx.textBaseline = 'bottom';
+  GROUPS.forEach((g, gi) => {
+    const x0 = xi;
+    for (let j = 0; j < g.n; j++, idx++) {
+      const v = Math.max(-1, Math.min(1, x[idx]));
+      sctx.fillStyle = gi === 3 ? CORNERS[Math.floor(j / 3)].color : (gi === 4 ? tok('--trail') : tok('--muted'));
+      const h = v * amp;
+      sctx.fillRect(xi + bw * 0.15, h > 0 ? mid - h : mid, bw * 0.7, Math.max(Math.abs(h), r));
+      xi += bw;
+    }
+    sctx.fillStyle = tok('--muted'); sctx.textAlign = 'center';
+    sctx.fillText(g.label, (x0 + xi) / 2, H);
+    xi += gap;
+  });
+}
+function setBar(el, out, v, centred, text) {
+  if (centred) {
+    const w = Math.min(Math.abs(v), 1) * 50;
+    el.style.left = (v >= 0 ? 50 : 50 - w) + '%'; el.style.width = w + '%';
+  } else { el.style.left = '0'; el.style.width = Math.max(0, Math.min(v, 1)) * 100 + '%'; }
+  out.textContent = text;
+}
+const f1 = (v) => (v >= 0 ? ' ' : '') + v.toFixed(2);
+
+const SHORT = ['BR', 'BL', 'TL', 'TR'];
+function marker(ctx, x, y, R, u, color) {
+  ctx.fillStyle = 'rgba(11,12,15,0.85)';                       // dark halo for contrast on any background
+  ctx.beginPath(); ctx.arc(x, y, R + 3.5 * u, 0, 7); ctx.fill();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(x, y, R, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2 * u;
+  ctx.beginPath(); ctx.arc(x, y, R + 3.5 * u, 0, 7); ctx.stroke();
+}
+function cross(ctx, x, y, h, u, color, plus) {
+  ctx.lineWidth = 4.5 * u; ctx.strokeStyle = 'rgba(11,12,15,0.85)';
+  for (const pass of [0, 1]) {
+    ctx.beginPath();
+    if (plus) { ctx.moveTo(x - h, y); ctx.lineTo(x + h, y); ctx.moveTo(x, y - h); ctx.lineTo(x, y + h); }
+    else { ctx.moveTo(x - h, y - h); ctx.lineTo(x + h, y + h); ctx.moveTo(x + h, y - h); ctx.lineTo(x - h, y + h); }
+    ctx.stroke(); ctx.lineWidth = 2.2 * u; ctx.strokeStyle = color;
+  }
+}
+function tag(ctx, text, x, y, u, color) {
+  const tw = ctx.measureText(text).width, S = ctx.canvas.width;
+  x = Math.min(Math.max(x, tw / 2 + 6 * u), S - tw / 2 - 6 * u);     // keep labels inside the image
+  y = Math.min(Math.max(y, 10 * u), S - 10 * u);
+  ctx.fillStyle = 'rgba(11,12,15,0.85)';
+  ctx.fillRect(x - tw / 2 - 4 * u, y - 8 * u, tw + 8 * u, 16 * u);
+  ctx.fillStyle = color; ctx.textAlign = 'center';
+  ctx.fillText(text, x, y + 0.5 * u);
+}
+
+function drawCamera(f, i, k) {
+  const tgt = D.target[i][k];
+  // with perception: show the camera frame the detector last worked on (30 Hz, arrives 40 ms late)
+  let fi = -1, ci = k;
+  if (PERC) { fi = frameAt(i, k); if (fi >= 0) ci = Math.min(PERC.frames[i][fi][0], f.pts.length - 1); }
+  placeOnboard(droneCam, f.pts[ci], simQuat(f.q[ci]));
+  camRenderer.render(scene, droneCam);
+  const S = camOver.width;
+  octx.clearRect(0, 0, S, S);
+  const toPx = (w) => {
+    const c = w.clone().applyMatrix4(droneCam.matrixWorldInverse);
+    if (c.z >= -0.05) return null;  // behind the camera
+    const n = w.clone().project(droneCam);
+    return { x: (n.x + 1) / 2 * S, y: (1 - n.y) / 2 * S, inside: Math.abs(n.x) <= 1 && Math.abs(n.y) <= 1 };
+  };
+  const u = S / 360;   // marker scale follows the image size (panel, video, phone)
+  // optical axis crosshair and the line to the gate centre (the angle δ the reward cares about)
+  const c = S / 2, L = 14 * u;
+  octx.strokeStyle = 'rgba(255,255,255,0.95)'; octx.lineWidth = 2 * u;
+  octx.beginPath(); octx.moveTo(c - L, c); octx.lineTo(c + L, c); octx.moveTo(c, c - L); octx.lineTo(c, c + L); octx.stroke();
+  const gc = toPx(gateCentres[tgt]);
+  if (gc) {
+    octx.setLineDash([4 * u, 4 * u]);
+    octx.beginPath(); octx.moveTo(c, c); octx.lineTo(gc.x, gc.y); octx.stroke(); octx.setLineDash([]);
+  }
+  octx.font = `600 ${Math.round(11 * u)}px ${tok('--font-data')}`; octx.textBaseline = 'middle';
+  if (PERC) drawDetections(fi >= 0 ? PERC.frames[i][fi][1] : [], tgt, toPx, S, u);
+  else drawExact(tgt, toPx, u);
+  const axis = new THREE.Vector3(); droneCam.getWorldDirection(axis);
+  const delta = axis.angleTo(gateCentres[tgt].clone().sub(f.pts[ci]));
+  $('delta').textContent = (delta * 180 / Math.PI).toFixed(1) + '°';
+  const ecm = PERC ? errs[i][k] * 100 : 0;
+  $('perr').textContent = (ecm < 10 ? ecm.toFixed(1) : ecm.toFixed(0)) + ' cm';
+  return tgt;
+}
+
+function drawDetections(rows, tgt, toPx, S, u) {
+  const sc = S / IMG;
+  let nDet = 0, confSum = 0, confN = 0;
+  // label direction: away from the middle of the next gate's corners in the image
+  const tr = rows.filter((r) => (r[0] >> 2) === tgt);
+  const mx = tr.length ? tr.reduce((a, r) => a + r[1], 0) / tr.length * sc : S / 2;
+  const my = tr.length ? tr.reduce((a, r) => a + r[2], 0) / tr.length * sc : S / 2;
+  for (const pass of [0, 1]) for (const [cid, uu, vv, conf, flag] of rows) {
+    const g = cid >> 2, j = cid & 3, isT = g === tgt;
+    if ((pass === 1) !== isT) continue;
+    const x = uu * sc, y = vv * sc;
+    if (isT) { confSum += conf; confN++; }
+    if (flag === 1) nDet++;
+    if (!isT) {   // other gates: small white rings, or a small × when missed
+      octx.globalAlpha = flag === 1 ? 0.35 + 0.65 * conf : 0.55;
+      if (flag === 1) { octx.strokeStyle = '#e6e8ee'; octx.lineWidth = 2 * u; octx.beginPath(); octx.arc(x, y, (3 + 4 * conf) * u, 0, 7); octx.stroke(); }
+      else cross(octx, x, y, 3.5 * u, u, '#959cab', false);
+      octx.globalAlpha = 1;
+      continue;
+    }
+    const col = CORNERS[j].color;
+    let dx = x - mx, dy = y - my; const m = Math.hypot(dx, dy) || 1; dx /= m; dy /= m;
+    const R = (4 + 8 * conf) * u;
+    const tx = x + dx * (R + 26 * u), ty = y + dy * (R + 14 * u);
+    if (flag === 1) {
+      const tp = toPx(gateCorners[g][j]);
+      if (tp) cross(octx, tp.x, tp.y, 5 * u, u, '#ffffff', true);   // where the corner really is
+      octx.globalAlpha = 0.5 + 0.5 * conf;
+      marker(octx, x, y, R, u, col);
+      octx.globalAlpha = 1;
+      tag(octx, `${SHORT[j]} ${conf.toFixed(2)}`, tx, ty, u, col);
+    } else {
+      octx.globalAlpha = flag === 2 ? 0.55 : 1;
+      cross(octx, x, y, 8 * u, u, col, false);
+      octx.globalAlpha = 1;
+      tag(octx, `${SHORT[j]} ${flag === 2 ? 'hidden' : 'missed'}`, tx, ty, u, col);
+    }
+  }
+  $('detN').textContent = `${nDet} / ${rows.length}`;
+  $('confAvg').textContent = confN ? (confSum / confN).toFixed(2) : '–';
+}
+
+function drawExact(tgt, toPx, u) {   // perfect-perception rollouts: exact projections
+  octx.lineWidth = 2 * u; octx.strokeStyle = 'rgba(230,232,238,0.8)';
+  gateCorners.forEach((cs, g) => {
+    if (g === tgt) return;
+    for (const w of cs) { const p = toPx(w); if (p && p.inside) { octx.beginPath(); octx.arc(p.x, p.y, 5 * u, 0, 7); octx.stroke(); } }
+  });
+  const pts = gateCorners[tgt].map(toPx);
+  const vis = pts.filter((p) => p && p.inside);
+  const cx = vis.reduce((a, q) => a + q.x, 0) / (vis.length || 1), cy = vis.reduce((a, q) => a + q.y, 0) / (vis.length || 1);
+  pts.forEach((p, j) => {
+    if (!p || !p.inside) return;
+    const R = 9 * u;
+    marker(octx, p.x, p.y, R, u, CORNERS[j].color);
+    let dx = p.x - cx, dy = p.y - cy; const m = Math.hypot(dx, dy) || 1; dx /= m; dy /= m;
+    tag(octx, SHORT[j], p.x + dx * (R + 16 * u), p.y + dy * (R + 12 * u), u, CORNERS[j].color);
+  });
+  $('detN').textContent = `${vis.length} / ${vis.length}`;
+  $('confAvg').textContent = vis.length ? '1.00' : '–';
+}
+
+// error over the flight: estimate error, the filter's own 2σ, and when detector fixes arrived
+function drawErr(i, k) {
+  const W = errCanvas.width, H = errCanvas.height, r = devicePixelRatio;
+  ectx.clearRect(0, 0, W, H);
+  ectx.font = `${10.5 * r}px ${tok('--font-data')}`; ectx.textBaseline = 'middle';
+  const e = errs[i], n = e.length;
+  const sg = PERC ? PERC.sigma[i] : e.map(() => 0), kf = PERC ? PERC.kf[i] : [];
+  let top = 0;
+  for (let q = 0; q < n; q++) top = Math.max(top, e[q], 2 * (sg[q] || 0));
+  const ymax = Math.max(0.1, Math.ceil(top * 10) / 10);
+  const L = 44 * r, R = W - 4 * r, T = 6 * r, B = H - 10 * r;
+  const X = (q) => L + (R - L) * q / Math.max(n - 1, 1), Y = (v) => B - (B - T) * Math.min(v / ymax, 1);
+  ectx.strokeStyle = tok('--line'); ectx.lineWidth = r; ectx.fillStyle = tok('--muted'); ectx.textAlign = 'right';
+  for (const v of [0, ymax / 2, ymax]) {
+    ectx.beginPath(); ectx.moveTo(L, Y(v)); ectx.lineTo(R, Y(v)); ectx.stroke();
+    ectx.fillText(`${Math.round(v * 100)} cm`, L - 6 * r, Y(v));
+  }
+  if (PERC) {
+    ectx.fillStyle = tok('--est-band'); ectx.beginPath(); ectx.moveTo(X(0), Y(0));
+    for (let q = 0; q < n; q++) ectx.lineTo(X(q), Y(2 * sg[q]));
+    ectx.lineTo(X(n - 1), Y(0)); ectx.closePath(); ectx.fill();
+    for (let q = 0; q < kf.length; q++) {
+      if (!kf[q]) continue;
+      ectx.fillStyle = kf[q] === 1 ? tok('--good') : tok('--bad');
+      ectx.globalAlpha = kf[q] === 1 ? 0.45 : 1;
+      if (kf[q] === 1) ectx.fillRect(X(q), H - 5 * r, Math.max(r, (R - L) / n), 5 * r);
+      else ectx.fillRect(X(q) - r, T, 2 * r, B - T);
+      ectx.globalAlpha = 1;
+    }
+  }
+  ectx.strokeStyle = tok('--est'); ectx.lineWidth = 1.6 * r; ectx.beginPath();
+  for (let q = 0; q < n; q++) q ? ectx.lineTo(X(q), Y(e[q])) : ectx.moveTo(X(q), Y(e[q]));
+  ectx.stroke();
+  ectx.strokeStyle = tok('--fg'); ectx.lineWidth = 1.5 * r;
+  ectx.beginPath(); ectx.moveTo(X(k), T); ectx.lineTo(X(k), H); ectx.stroke();
+}
+
+function updatePerception(f, i, k) {
+  const tgt = drawCamera(f, i, k);
+  drawErr(i, k);
+  const x = policyInput(i, k);
+  drawStrip(x);
+  $('tgt').textContent = tgt + 1;
+  for (let j = 0; j < 4; j++) for (let a = 0; a < 3; a++)
+    cornerCells[j][a].textContent = (x[15 + 3 * j + a] * 10).toFixed(2);
+  $('pos').textContent = estPos(i, k).map((v) => v.toFixed(1)).join('  ');
+  const v = x.slice(3, 6).map((u) => u * 10);
+  $('vel').textContent = `${v.map((u) => u.toFixed(1)).join('  ')}  (|v| ${Math.hypot(...v).toFixed(1)})`;
+  const ctr = [0, 1, 2].map((a) => (x[15 + a] + x[18 + a] + x[21 + a] + x[24 + a]) / 4 * 10);
+  $('gdist').textContent = Math.hypot(...ctr).toFixed(1);
+  const a = D.act[i][k];
+  const thrust = (a[0] + 1) / 2 * D.max_thrust;
+  setBar($('bThrust'), $('oThrust'), (a[0] + 1) / 2, false, `${thrust.toFixed(1)} m/s²`);
+  setBar($('bRoll'), $('oRoll'), a[1], true, `${f1(a[1] * D.max_rate[0])} rad/s`);
+  setBar($('bPitch'), $('oPitch'), a[2], true, `${f1(a[2] * D.max_rate[1])} rad/s`);
+  setBar($('bYaw'), $('oYaw'), a[3], true, `${f1(a[3] * D.max_rate[2])} rad/s`);
+  // 3D: rays to the corners, a ring on the target gate, the camera's field of view
+  // rays start where the drone *believes* it is: that is what its corner numbers are relative to
+  const rp = rayGeo.attributes.position.array, P = f.pts[k], E = V(estPos(i, k));
+  gateCorners[tgt].forEach((w, j) => { E.toArray(rp, 6 * j); w.toArray(rp, 6 * j + 3); });
+  rayGeo.attributes.position.needsUpdate = true;
+  const ra = ringGeo.attributes.position.array;
+  [0, 1, 2, 3, 0].forEach((j, n) => gateCorners[tgt][j].toArray(ra, 3 * n));
+  ringGeo.attributes.position.needsUpdate = true;
+  cornerBalls.forEach((b, j) => b.position.copy(gateCorners[tgt][j]));
+  const fa = frustumGeo.attributes.position.array, len = 0.8, h = Math.tan(CAM_FOV / 2 * Math.PI / 180) * len;
+  const ends = [[-h, -h], [h, -h], [h, h], [-h, h]].map(([u, w]) => new THREE.Vector3(u, w, -len).applyMatrix4(droneCam.matrixWorld));
+  ends.forEach((e, j) => {
+    P.toArray(fa, 12 * j); e.toArray(fa, 12 * j + 3);
+    e.toArray(fa, 12 * j + 6); ends[(j + 1) % 4].toArray(fa, 12 * j + 9);
+  });
+  frustumGeo.attributes.position.needsUpdate = true;
+  estBall.position.copy(E);
+  const sig = PERC ? PERC.sigma[i][k] : 0;
+  estCloud.position.copy(E); estCloud.scale.setScalar(Math.max(2 * sig, 0.01));
+  const la = estLinkGeo.attributes.position.array; P.toArray(la, 0); E.toArray(la, 3);
+  estLinkGeo.attributes.position.needsUpdate = true;
+}
+
+let last = performance.now();
+function frame(now) {
+  const el = Math.max(0, Math.min((now - last) / 1000, 0.1)); last = now;
+  const i = +focus.value || 0, f = drones[i], n = f.pts.length;
+  if (playing) { t += el / dt * rate; if (t >= n - 1) t = 0; }
+  const k = Math.max(0, Math.min(Math.floor(t), n - 1));
+  drones.forEach((d) => {
+    const m = d.pts.length, j = Math.min(k, m - 1);
+    d.body.visible = k < m;
+    d.body.position.copy(d.pts[j]);
+    d.body.quaternion.copy(simQuat(d.q[j]));
+    const arr = d.tailGeo.attributes.position.array;
+    for (let s = 0; s < d.TAIL; s++) d.pts[Math.max(0, j - (d.TAIL - 1 - s))].toArray(arr, s * 3);
+    d.tailGeo.attributes.position.needsUpdate = true;
+  });
+  updatePerception(f, i, k);
+  const mode = $('cam').value, qb = simQuat(f.q[k]);
+  if (mode === 'orbit') { controls.enabled = true; controls.update(); }
+  else {
+    controls.enabled = false;
+    if (mode === 'fpv') { f.body.visible = false; placeOnboard(camera, f.pts[k], qb); }
+    else {
+      const fwd = new THREE.Vector3(1, 0, 0).applyQuaternion(qb); fwd.y = 0; fwd.normalize();
+      const want = f.pts[k].clone().addScaledVector(fwd, -3.2).add(new THREE.Vector3(0, 1.3, 0));
+      camera.position.lerp(want, 0.12);
+      camera.lookAt(f.pts[k]);
+    }
+  }
+  const showViz = mode !== 'fpv';
+  rays.visible = ring.visible = showViz;
+  cornerBalls.forEach((b) => b.visible = showViz);
+  estBall.visible = estCloud.visible = estLink.visible = showViz && !!PERC;
+  frustum.visible = mode === 'orbit';
+  if (k > 0) $('speed').textContent = (f.pts[k].distanceTo(f.pts[k - 1]) / dt).toFixed(1);
+  $('gateNo').textContent = D.target[i][k] + 1;
+  $('clock').textContent = (k * dt).toFixed(2) + ' s';
+  $('scrub').value = Math.round(1000 * t / Math.max(n - 1, 1));
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
