@@ -1,10 +1,10 @@
-![Chase view and onboard detector camera, slow motion](demo.gif)
+
 # Gate Race Sim
 
 A small, fast, noise-free quadrotor racing simulator with TF-Agents PPO training.
 It is modelled on the training setup of *Swift* (Kaufmann et al., Nature 2023), with the
 messy parts (sensor noise, residual models, camera images) left out on purpose.
-
+![Chase view and onboard detector camera, slow motion](demo.gif)
 ## Install
 
 TF-Agents does not support Python 3.13 yet, so use 3.10 or 3.11:
