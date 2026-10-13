@@ -1,3 +1,4 @@
+![Chase view and onboard detector camera, slow motion](demo.gif)
 # Gate Race Sim
 
 A small, fast, noise-free quadrotor racing simulator with TF-Agents PPO training.
@@ -67,12 +68,6 @@ To render a video (chase view + onboard camera side by side, 1920×1080, 60 fps)
 ```bash
 python record_video.py --html viewer.html --drone 0 --out race.mp4 --slow_out race_slowmo.mp4
 ```
-
-Example output (chase view + onboard detector camera, slow motion):
-
-![Chase view and onboard detector camera, slow motion](demo.gif)
-
-Full-length video: [gate_race_detector_chase_and_camera_slowmo.mp4](gate_race_detector_chase_and_camera_slowmo.mp4)
 
 Add `--podium` to `rollout.py` to start from the ground instead of in front of a random gate.
 
